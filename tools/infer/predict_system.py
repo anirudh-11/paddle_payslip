@@ -13,6 +13,7 @@
 # limitations under the License.
 import os
 import sys
+import json
 
 __dir__ = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(__dir__)
@@ -24,6 +25,9 @@ import cv2
 import copy
 import numpy as np
 import time
+import regex as re
+import spacy
+
 from PIL import Image
 import tools.infer.utility as utility
 import tools.infer.predict_rec as predict_rec
@@ -31,10 +35,13 @@ import tools.infer.predict_det as predict_det
 import tools.infer.predict_cls as predict_cls
 from ppocr.utils.utility import get_image_file_list, check_and_read_gif
 from ppocr.utils.logging import get_logger
+from ppocr.utils.extract import get_employee_name,bboxmidpoint,get_organization_name
+from ppocr.utils.extract import save_to_json,findclosest_frnetpay,annotate
 from tools.infer.utility import draw_ocr_box_txt
 
 logger = get_logger()
 
+dictionary_companies=("pvt","organization","private","limited","ltd","services")
 
 class TextSystem(object):
     def __init__(self, args):
@@ -117,7 +124,6 @@ class TextSystem(object):
                 filter_rec_res.append(rec_reuslt)
         return filter_boxes, filter_rec_res
 
-
 def sorted_boxes(dt_boxes):
     """
     Sort text boxes in order from top to bottom, left to right
@@ -129,7 +135,7 @@ def sorted_boxes(dt_boxes):
     num_boxes = dt_boxes.shape[0]
     sorted_boxes = sorted(dt_boxes, key=lambda x: (x[0][1], x[0][0]))
     _boxes = list(sorted_boxes)
-
+    #print(_boxes)
     for i in range(num_boxes - 1):
         if abs(_boxes[i + 1][0][1] - _boxes[i][0][1]) < 10 and \
                 (_boxes[i + 1][0][0] < _boxes[i][0][0]):
@@ -138,7 +144,6 @@ def sorted_boxes(dt_boxes):
             _boxes[i + 1] = tmp
     return _boxes
 
-
 def main(args):
     image_file_list = get_image_file_list(args.image_dir)
     text_sys = TextSystem(args)
@@ -146,19 +151,70 @@ def main(args):
     font_path = args.vis_font_path
     drop_score = args.drop_score
     for image_file in image_file_list:
+        person_name ={"Employee name": " "}
+        netpay={"Net pay": ""}
+        orgnzn_nm={"Organization name":" "}
         img, flag = check_and_read_gif(image_file)
         if not flag:
-            img = cv2.imread(image_file)
+            img_ind= image_file.rfind('/')
+            filename= image_file[-(len(image_file)-img_ind-1):]
+            filename=filename[:-4]
+            img = cv2.imread(image_file)       
+        if flag:
+            image_file= img
+            img_ind= img.rfind('/')
+            filename= image_file[-(len(image_file)-img_ind-1):]
+            filename=filename[:-4]
+            img = cv2.imread(img)   
         if img is None:
             logger.info("error in loading image:{}".format(image_file))
             continue
         starttime = time.time()
         dt_boxes, rec_res = text_sys(img)
+        mp_boxes=bboxmidpoint(dt_boxes)
         elapse = time.time() - starttime
         logger.info("Predict time of %s: %.3fs" % (image_file, elapse))
-
+        boxcount = 0
+        company_count = 0
+        count_emp_nm = 0 
+        count_netpay = 0
+        annotate(image_file,rec_res,dt_boxes,filename)
         for text, score in rec_res:
-            logger.info("{}, {:.3f}".format(text, score))
+            #text_type=""
+            #logger.info("{}, {:.3f}".format(text, score))
+            #print(text)
+            numpattern=re.compile("[\d,.\s]+$")
+            alphpattern=re.compile("[a-zA-Z\s.,$()/-]+$")
+            if ("name" in text.lower() or "mr" in text.lower()) and count_emp_nm==0:
+              person_name = get_employee_name(text,boxcount,rec_res,mp_boxes)
+              if person_name is not None:
+                count_emp_nm =1
+              else:
+                person_name ={"Employee name": " "}
+            if alphpattern.match(text):
+              text =text.lower()
+              for i in dictionary_companies:
+                if (i in text and company_count==0):
+                  orgnzn_nm = get_organization_name(text,boxcount,rec_res,mp_boxes)
+                  if orgnzn_nm is None:
+                    orgnzn_nm ={}
+                    orgnzn_nm["Organization name"] =" "
+            elif numpattern.match(text):
+              text_type="NUMERIC"
+           
+            #finding if net pay exists in text
+            res=0
+            if "net" in text.lower() and count_netpay ==0:
+              #calling netpay function to find key value pairs
+        
+              netpay=findclosest_frnetpay(text,boxcount,rec_res,dt_boxes,mp_boxes)
+              count_netpay =1
+            boxcount+=1
+
+        jsondata={**orgnzn_nm,**netpay,**person_name}
+        out_dir="/content/gdrive/MyDrive/Paddle_OCR/PaddleOCR/inference_results/"
+
+        save_to_json(filename,out_dir,jsondata)
 
         if is_visualize:
             image = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
