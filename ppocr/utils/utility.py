@@ -14,8 +14,9 @@
 
 import logging
 import os
-import imghdr
+import ppocr.utils.imghdr2 as imghdr2
 import cv2
+from pdf2image import convert_from_path 
 
 
 def print_dict(d, logger, delimiter=0):
@@ -51,13 +52,13 @@ def get_image_file_list(img_file):
     if img_file is None or not os.path.exists(img_file):
         raise Exception("not found any img file in {}".format(img_file))
 
-    img_end = {'jpg', 'bmp', 'png', 'jpeg', 'rgb', 'tif', 'tiff', 'gif', 'GIF'}
-    if os.path.isfile(img_file) and imghdr.what(img_file) in img_end:
+    img_end = {'jpg', 'bmp', 'png', 'jpeg', 'rgb', 'tif', 'tiff', 'gif', 'GIF','pdf'}
+    if os.path.isfile(img_file) and imghdr2.what(img_file) in img_end:
         imgs_lists.append(img_file)
     elif os.path.isdir(img_file):
         for single_file in os.listdir(img_file):
             file_path = os.path.join(img_file, single_file)
-            if os.path.isfile(file_path) and imghdr.what(file_path) in img_end:
+            if os.path.isfile(file_path) and imghdr2.what(file_path) in img_end:
                 imgs_lists.append(file_path)
     if len(imgs_lists) == 0:
         raise Exception("not found any img file in {}".format(img_file))
@@ -76,4 +77,22 @@ def check_and_read_gif(img_path):
             frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2RGB)
         imgvalue = frame[:, :, ::-1]
         return imgvalue, True
+
+    if os.path.basename(img_path)[-3:] in ['pdf','PDF']:
+        images = convert_from_path(img_path,200)
+        new_img_path = img_path[:-4] + ".jpg"
+        img_ind= img_path.rfind('/')
+        pdf_filename= img_path[-(len(img_path)-img_ind-1):]
+        pdf_folder= img_path[:-(len(img_path)-img_ind-1)]+ "pdf_folder"
+  
+        if not os.path.exists(pdf_folder):
+            os.makedirs(pdf_folder)
+            os.rename(img_path, pdf_folder+"/"+pdf_filename)
+        else:
+            os.rename(img_path, pdf_folder+"/"+pdf_filename)  
+
+        for image in images:
+          image.save(new_img_path, 'JPEG')
+
+        return new_img_path, True
     return None, False
